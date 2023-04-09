@@ -9,8 +9,11 @@ use std::{thread, time};
 #[derive(Parser)]
 #[command(arg_required_else_help(true))]
 struct Arguments {
-  #[arg(long, help = "The Hosted Zone ID")]
-  hosted_zone_id: String,
+  #[arg(
+    long,
+    help = "The Hosted Zone ID (optional, will be looked up automatically based on --dns-name if omitted)"
+  )]
+  hosted_zone_id: Option<String>,
 
   #[arg(long, help = "DNS record name to update (e.g. service.example.com)")]
   dns_name: String,
@@ -44,7 +47,7 @@ async fn main() -> Result<(), std::io::Error> {
     .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
     .ttl(300)
-    .name(args.dns_name)
+    .name(args.dns_name.clone())
     .r#type(dns_type)
     .resource_records(rr)
     .build();
@@ -56,9 +59,50 @@ async fn main() -> Result<(), std::io::Error> {
     .changes(change)
     .build();
 
+  let hosted_zone_id;
+  if args.hosted_zone_id.is_some() {
+    hosted_zone_id = args.hosted_zone_id.unwrap();
+  } else {
+    let response = route53_client
+      .list_hosted_zones()
+      .send()
+      .await
+      .expect("could not list hosted zones");
+    if response.is_truncated() {
+      panic!("you have a lot of hosted zones and this program does not paginate yet, please use --hosted-zone-id");
+    }
+
+    let mut search_name = args.dns_name.clone();
+    if !search_name.ends_with(".") {
+      search_name = search_name + ".";
+    }
+
+    loop {
+      let zones: Vec<_> = response
+        .hosted_zones()
+        .unwrap()
+        .into_iter()
+        .filter(|zone| zone.name().unwrap().eq(&search_name))
+        .collect();
+      if zones.len() == 0 {
+        let search_split = search_name.split_once(".");
+        if search_split.is_some() {
+          search_name = search_split.unwrap().1.to_string();
+        } else {
+          panic!("could not find the hosted zone for: {}", args.dns_name);
+        }
+      } else if zones.len() == 1 {
+        hosted_zone_id = zones.first().unwrap().id().unwrap().to_string();
+        break;
+      } else {
+        panic!("multiple zones with name: {}", search_name);
+      }
+    }
+  }
+
   let response = route53_client
     .change_resource_record_sets()
-    .hosted_zone_id(args.hosted_zone_id)
+    .hosted_zone_id(hosted_zone_id)
     .change_batch(change_batch)
     .send()
     .await
