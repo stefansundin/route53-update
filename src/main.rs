@@ -3,6 +3,7 @@
 
 use aws_sdk_route53::types::{ChangeStatus, RrType};
 use clap::Parser;
+use std::net::IpAddr;
 use std::str::FromStr;
 use std::{thread, time};
 
@@ -18,8 +19,11 @@ struct Arguments {
   #[arg(long, help = "DNS record name to update (e.g. service.example.com)")]
   dns_name: String,
 
-  #[arg(long, help = "DNS record type", default_value = "A")]
-  dns_type: String,
+  #[arg(
+    long,
+    help = "DNS record type (optional, is auto-detected from --dns-value or --value-from-url when possible, TXT is used as fallback)"
+  )]
+  dns_type: Option<String>,
 
   #[arg(long, help = "DNS record value")]
   dns_value: Option<String>,
@@ -37,16 +41,23 @@ struct Arguments {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), std::io::Error> {
   let args = Arguments::parse();
-  let dns_type = aws_sdk_route53::types::RrType::from_str(args.dns_type.as_str()).unwrap();
-  if matches!(dns_type, RrType::Unknown(_)) {
-    panic!("unknown DNS type: {}", args.dns_type);
-  } else if args.dns_value.is_some() && args.value_from_url.is_some() {
+  if args.dns_value.is_some() && args.value_from_url.is_some() {
     panic!("can't use both --dns-value and --value-from-url.");
+  }
+
+  let mut dns_type = None;
+  if args.dns_type.is_some() {
+    dns_type = Some(
+      aws_sdk_route53::types::RrType::from_str(args.dns_type.clone().unwrap().as_str()).unwrap(),
+    );
+    if matches!(dns_type.clone().unwrap(), RrType::Unknown(_)) {
+      panic!("unknown DNS type: {}", args.dns_type.unwrap());
+    }
   }
 
   let mut dns_value;
   if args.dns_value.is_some() {
-    dns_value = args.dns_value.unwrap();
+    dns_value = args.dns_value;
   } else if args.value_from_url.is_some() {
     let url = args.value_from_url.unwrap();
     let response = reqwest::get(url.as_str()).await.unwrap();
@@ -57,13 +68,23 @@ async fn main() -> Result<(), std::io::Error> {
         response.status()
       )
     }
-    dns_value = response.text().await.unwrap().trim().to_string();
-    if matches!(dns_type, RrType::Txt) && !dns_value.starts_with('"') && !dns_value.ends_with('"') {
-      // TXT records must be enclosed in quotes
-      dns_value = format!("\"{}\"", dns_value)
-    }
+    let response_text = response.text().await.unwrap().trim().to_string();
+    eprintln!("{} returned {:?}", url, response_text);
+    dns_value = Some(response_text);
   } else {
     panic!("value must be supplied with --dns-value or --value-from-url.");
+  }
+
+  if dns_type.is_none() {
+    dns_type = Some(detect_record_type(dns_value.clone().unwrap().as_str()));
+  }
+
+  // TXT records must be enclosed in quotes
+  if matches!(dns_type.clone().unwrap(), RrType::Txt) {
+    let v = dns_value.clone().unwrap();
+    if !v.starts_with('"') && !v.ends_with('"') {
+      dns_value = Some(format!("\"{}\"", v));
+    }
   }
 
   let region_provider =
@@ -73,12 +94,12 @@ async fn main() -> Result<(), std::io::Error> {
   let route53_client = aws_sdk_route53::client::Client::from_conf(route53_config.build());
 
   let rr = aws_sdk_route53::types::ResourceRecord::builder()
-    .value(dns_value)
+    .set_value(dns_value)
     .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
     .ttl(300)
     .name(args.dns_name.clone())
-    .r#type(dns_type)
+    .set_type(dns_type)
     .resource_records(rr)
     .build();
   let change = aws_sdk_route53::types::Change::builder()
@@ -160,4 +181,20 @@ async fn main() -> Result<(), std::io::Error> {
   }
 
   return Ok(());
+}
+
+fn detect_record_type(text: &str) -> RrType {
+  let addr = text.parse::<IpAddr>();
+  if addr.is_ok() {
+    let unwrapped_addr = addr.unwrap();
+    if unwrapped_addr.is_ipv4() {
+      aws_sdk_route53::types::RrType::A
+    } else if unwrapped_addr.is_ipv6() {
+      aws_sdk_route53::types::RrType::Aaaa
+    } else {
+      panic!();
+    }
+  } else {
+    aws_sdk_route53::types::RrType::Txt
+  }
 }
