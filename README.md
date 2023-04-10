@@ -1,1 +1,31 @@
 This is a tiny program that can update a DNS record in Amazon Route 53.
+
+The program is brand new so the command line arguments may change. Use with caution.
+
+Please note that some features like `--clear` will delete records which can be disastrous if used incorrectly. Please do not experiment in a production environment!
+
+## Usage
+
+```
+Usage: route53-update [OPTIONS] --record-name <NAME>
+
+Options:
+      --hosted-zone-id <HOSTED_ZONE_ID>
+          The Hosted Zone ID (optional, will be looked up automatically based on --record-name if omitted)
+      --record-name <NAME>
+          Record name to update (e.g. service.example.com)
+      --record-type <TYPE>
+          Record type (optional, is auto-detected from --record-value or --value-from-url when possible, TXT is used as fallback)
+      --record-value <VALUE>
+          Record value
+      --value-from-url <URL>
+          Get the value from a URL (e.g. https://checkip.amazonaws.com/)
+      --ttl <TTL>
+          TTL for the DNS record (optional, if an existing record exists then its TTL will be copied, 300 is used as fallback)
+      --wait
+          Wait for the change to propagate in Route 53
+      --clear
+          Delete potentially conflicting records (A, AAAA, CNAME)
+  -h, --help
+          Print help
+```
