@@ -11,27 +11,27 @@ use std::{thread, time};
 struct Arguments {
   #[arg(
     long,
-    help = "The Hosted Zone ID (optional, will be looked up automatically based on --dns-name if omitted)"
+    help = "The Hosted Zone ID (optional, will be looked up automatically based on --record-name if omitted)"
   )]
   hosted_zone_id: Option<String>,
 
   #[arg(
     long,
     value_name = "NAME",
-    help = "DNS record name to update (e.g. service.example.com)"
+    help = "Record name to update (e.g. service.example.com)"
   )]
-  dns_name: String,
+  record_name: String,
 
   #[arg(
     long,
     value_enum,
     value_name = "TYPE",
-    help = "DNS record type (optional, is auto-detected from --dns-value or --value-from-url when possible, TXT is used as fallback)"
+    help = "Record type (optional, is auto-detected from --record-value or --value-from-url when possible, TXT is used as fallback)"
   )]
-  dns_type: Option<aws_sdk_route53::types::RrType>,
+  record_type: Option<aws_sdk_route53::types::RrType>,
 
-  #[arg(long, value_name = "VALUE", help = "DNS record value")]
-  dns_value: Option<String>,
+  #[arg(long, value_name = "VALUE", help = "Record value")]
+  record_value: Option<String>,
 
   #[arg(
     long,
@@ -56,20 +56,20 @@ struct Arguments {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), std::io::Error> {
   let mut args = Arguments::parse();
-  if args.dns_value.is_some() && args.value_from_url.is_some() {
-    panic!("can't use both --dns-value and --value-from-url.");
-  } else if args.dns_value.is_none() && args.value_from_url.is_none() {
-    panic!("value must be supplied with --dns-value or --value-from-url.");
-  } else if args.dns_type.is_some() {
-    if matches!(args.dns_type, Some(RrType::Unknown(_))) {
-      panic!("unknown DNS type: {:?}", args.dns_type.unwrap());
-    } else if args.dns_type == Some(RrType::Txt) && args.clear {
+  if args.record_value.is_some() && args.value_from_url.is_some() {
+    panic!("can't use both --record-value and --value-from-url.");
+  } else if args.record_value.is_none() && args.value_from_url.is_none() {
+    panic!("value must be supplied with --record-value or --value-from-url.");
+  } else if args.record_type.is_some() {
+    if matches!(args.record_type, Some(RrType::Unknown(_))) {
+      panic!("unknown DNS type: {:?}", args.record_type.unwrap());
+    } else if args.record_type == Some(RrType::Txt) && args.clear {
       panic!("--clear only works with A, AAAA, or CNAME");
     }
   }
 
-  if !args.dns_name.ends_with(".") {
-    args.dns_name = args.dns_name + ".";
+  if !args.record_name.ends_with(".") {
+    args.record_name = args.record_name + ".";
   }
 
   if args.value_from_url.is_some() {
@@ -84,21 +84,23 @@ async fn main() -> Result<(), std::io::Error> {
     }
     let response_text = response.text().await.unwrap().trim().to_string();
     eprintln!("{} returned {:?}", url, response_text);
-    args.dns_value = Some(response_text);
+    args.record_value = Some(response_text);
   }
 
-  if args.dns_type.is_none() {
-    args.dns_type = Some(detect_record_type(args.dns_value.clone().unwrap().as_str()));
-    if args.dns_type == Some(RrType::Txt) && args.clear {
+  if args.record_type.is_none() {
+    args.record_type = Some(detect_record_type(
+      args.record_value.clone().unwrap().as_str(),
+    ));
+    if args.record_type == Some(RrType::Txt) && args.clear {
       panic!("--clear only works with A, AAAA, or CNAME");
     }
   }
 
   // TXT records must be enclosed in quotes
-  if matches!(args.dns_type, Some(RrType::Txt)) {
-    let v = args.dns_value.clone().unwrap();
+  if matches!(args.record_type, Some(RrType::Txt)) {
+    let v = args.record_value.clone().unwrap();
     if !v.starts_with('"') && !v.ends_with('"') {
-      args.dns_value = Some(format!("\"{}\"", v));
+      args.record_value = Some(format!("\"{}\"", v));
     }
   }
 
@@ -118,7 +120,7 @@ async fn main() -> Result<(), std::io::Error> {
       panic!("you have a lot of hosted zones and this program does not paginate yet, please use --hosted-zone-id");
     }
 
-    let mut search_name = args.dns_name.clone();
+    let mut search_name = args.record_name.clone();
     loop {
       let zones: Vec<_> = response
         .hosted_zones()
@@ -131,7 +133,7 @@ async fn main() -> Result<(), std::io::Error> {
         if search_split.is_some() {
           search_name = search_split.unwrap().1.to_string();
         } else {
-          panic!("could not find the hosted zone for: {}", args.dns_name);
+          panic!("could not find the hosted zone for: {}", args.record_name);
         }
       } else if zones.len() == 1 {
         let zone = zones.first().unwrap();
@@ -166,7 +168,7 @@ async fn main() -> Result<(), std::io::Error> {
         .resource_record_sets()
         .unwrap()
         .into_iter()
-        .find(|r| r.name() == Some(&args.dns_name) && r.r#type() == args.dns_type.as_ref())
+        .find(|r| r.name() == Some(&args.record_name) && r.r#type() == args.record_type.as_ref())
         .map(|r| r.ttl().unwrap());
       if args.ttl.is_some() {
         eprintln!("Copied TTL from existing record: {}", args.ttl.unwrap())
@@ -185,14 +187,14 @@ async fn main() -> Result<(), std::io::Error> {
         .resource_record_sets()
         .unwrap()
         .into_iter()
-        .filter(|r| r.name() == Some(&args.dns_name))
+        .filter(|r| r.name() == Some(&args.record_name))
         .filter(|r| {
-          args.dns_type == Some(RrType::Cname)
+          args.record_type == Some(RrType::Cname)
             || (r.r#type() == Some(&RrType::A)
               || r.r#type() == Some(&RrType::Aaaa)
               || r.r#type() == Some(&RrType::Cname))
         })
-        .filter(|r| r.r#type() != args.dns_type.clone().as_ref())
+        .filter(|r| r.r#type() != args.record_type.clone().as_ref())
       {
         let change = aws_sdk_route53::types::Change::builder()
           .action(aws_sdk_route53::types::ChangeAction::Delete)
@@ -220,12 +222,12 @@ async fn main() -> Result<(), std::io::Error> {
   }
 
   let rr = aws_sdk_route53::types::ResourceRecord::builder()
-    .set_value(args.dns_value)
+    .set_value(args.record_value)
     .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
     .set_ttl(args.ttl)
-    .name(args.dns_name.clone())
-    .set_type(args.dns_type.clone())
+    .name(args.record_name.clone())
+    .set_type(args.record_type.clone())
     .resource_records(rr)
     .build();
   let change = aws_sdk_route53::types::Change::builder()
