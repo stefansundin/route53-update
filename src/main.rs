@@ -22,7 +22,13 @@ struct Arguments {
   dns_type: String,
 
   #[arg(long, help = "DNS record value")]
-  dns_value: String,
+  dns_value: Option<String>,
+
+  #[arg(
+    long,
+    help = "Get the value from a URL (e.g. https://checkip.amazonaws.com/)"
+  )]
+  value_from_url: Option<String>,
 
   #[arg(long, help = "Wait for the change to propagate in Route 53")]
   wait: bool,
@@ -34,6 +40,30 @@ async fn main() -> Result<(), std::io::Error> {
   let dns_type = aws_sdk_route53::types::RrType::from_str(args.dns_type.as_str()).unwrap();
   if matches!(dns_type, RrType::Unknown(_)) {
     panic!("unknown DNS type: {}", args.dns_type);
+  } else if args.dns_value.is_some() && args.value_from_url.is_some() {
+    panic!("can't use both --dns-value and --value-from-url.");
+  }
+
+  let mut dns_value;
+  if args.dns_value.is_some() {
+    dns_value = args.dns_value.unwrap();
+  } else if args.value_from_url.is_some() {
+    let url = args.value_from_url.unwrap();
+    let response = reqwest::get(url.as_str()).await.unwrap();
+    if response.status() != reqwest::StatusCode::OK {
+      panic!(
+        "response from {} returned non-200 status code: {}",
+        url,
+        response.status()
+      )
+    }
+    dns_value = response.text().await.unwrap().trim().to_string();
+    if matches!(dns_type, RrType::Txt) && !dns_value.starts_with('"') && !dns_value.ends_with('"') {
+      // TXT records must be enclosed in quotes
+      dns_value = format!("\"{}\"", dns_value)
+    }
+  } else {
+    panic!("value must be supplied with --dns-value or --value-from-url.");
   }
 
   let region_provider =
@@ -43,7 +73,7 @@ async fn main() -> Result<(), std::io::Error> {
   let route53_client = aws_sdk_route53::client::Client::from_conf(route53_config.build());
 
   let rr = aws_sdk_route53::types::ResourceRecord::builder()
-    .value(args.dns_value)
+    .value(dns_value)
     .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
     .ttl(300)
