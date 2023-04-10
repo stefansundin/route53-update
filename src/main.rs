@@ -4,7 +4,6 @@
 use aws_sdk_route53::types::{ChangeStatus, RrType};
 use clap::Parser;
 use std::net::IpAddr;
-use std::str::FromStr;
 use std::{thread, time};
 
 #[derive(Parser)]
@@ -21,9 +20,10 @@ struct Arguments {
 
   #[arg(
     long,
+    value_enum,
     help = "DNS record type (optional, is auto-detected from --dns-value or --value-from-url when possible, TXT is used as fallback)"
   )]
-  dns_type: Option<String>,
+  dns_type: Option<aws_sdk_route53::types::RrType>,
 
   #[arg(long, help = "DNS record value")]
   dns_value: Option<String>,
@@ -40,25 +40,18 @@ struct Arguments {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), std::io::Error> {
-  let args = Arguments::parse();
+  let mut args = Arguments::parse();
   if args.dns_value.is_some() && args.value_from_url.is_some() {
     panic!("can't use both --dns-value and --value-from-url.");
-  }
-
-  let mut dns_type = None;
-  if args.dns_type.is_some() {
-    dns_type = Some(
-      aws_sdk_route53::types::RrType::from_str(args.dns_type.clone().unwrap().as_str()).unwrap(),
-    );
-    if matches!(dns_type.clone().unwrap(), RrType::Unknown(_)) {
-      panic!("unknown DNS type: {}", args.dns_type.unwrap());
+  } else if args.dns_value.is_none() && args.value_from_url.is_none() {
+    panic!("value must be supplied with --dns-value or --value-from-url.");
+  } else if args.dns_type.is_some() {
+    if matches!(args.dns_type.clone().unwrap(), RrType::Unknown(_)) {
+      panic!("unknown DNS type: {:?}", args.dns_type.unwrap());
     }
   }
 
-  let mut dns_value;
-  if args.dns_value.is_some() {
-    dns_value = args.dns_value;
-  } else if args.value_from_url.is_some() {
+  if args.value_from_url.is_some() {
     let url = args.value_from_url.unwrap();
     let response = reqwest::get(url.as_str()).await.unwrap();
     if response.status() != reqwest::StatusCode::OK {
@@ -70,20 +63,18 @@ async fn main() -> Result<(), std::io::Error> {
     }
     let response_text = response.text().await.unwrap().trim().to_string();
     eprintln!("{} returned {:?}", url, response_text);
-    dns_value = Some(response_text);
-  } else {
-    panic!("value must be supplied with --dns-value or --value-from-url.");
+    args.dns_value = Some(response_text);
   }
 
-  if dns_type.is_none() {
-    dns_type = Some(detect_record_type(dns_value.clone().unwrap().as_str()));
+  if args.dns_type.is_none() {
+    args.dns_type = Some(detect_record_type(args.dns_value.clone().unwrap().as_str()));
   }
 
   // TXT records must be enclosed in quotes
-  if matches!(dns_type.clone().unwrap(), RrType::Txt) {
-    let v = dns_value.clone().unwrap();
+  if matches!(args.dns_type.clone().unwrap(), RrType::Txt) {
+    let v = args.dns_value.clone().unwrap();
     if !v.starts_with('"') && !v.ends_with('"') {
-      dns_value = Some(format!("\"{}\"", v));
+      args.dns_value = Some(format!("\"{}\"", v));
     }
   }
 
@@ -94,12 +85,12 @@ async fn main() -> Result<(), std::io::Error> {
   let route53_client = aws_sdk_route53::client::Client::from_conf(route53_config.build());
 
   let rr = aws_sdk_route53::types::ResourceRecord::builder()
-    .set_value(dns_value)
+    .set_value(args.dns_value)
     .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
     .ttl(300)
     .name(args.dns_name.clone())
-    .set_type(dns_type)
+    .set_type(args.dns_type)
     .resource_records(rr)
     .build();
   let change = aws_sdk_route53::types::Change::builder()
@@ -110,10 +101,7 @@ async fn main() -> Result<(), std::io::Error> {
     .changes(change)
     .build();
 
-  let hosted_zone_id;
-  if args.hosted_zone_id.is_some() {
-    hosted_zone_id = args.hosted_zone_id.unwrap();
-  } else {
+  if args.hosted_zone_id.is_none() {
     let response = route53_client
       .list_hosted_zones()
       .send()
@@ -143,7 +131,7 @@ async fn main() -> Result<(), std::io::Error> {
           panic!("could not find the hosted zone for: {}", args.dns_name);
         }
       } else if zones.len() == 1 {
-        hosted_zone_id = zones.first().unwrap().id().unwrap().to_string();
+        args.hosted_zone_id = Some(zones.first().unwrap().id().unwrap().to_string());
         break;
       } else {
         panic!("multiple zones with name: {}", search_name);
@@ -153,7 +141,7 @@ async fn main() -> Result<(), std::io::Error> {
 
   let response = route53_client
     .change_resource_record_sets()
-    .hosted_zone_id(hosted_zone_id)
+    .set_hosted_zone_id(args.hosted_zone_id)
     .change_batch(change_batch)
     .send()
     .await
