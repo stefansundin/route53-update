@@ -15,24 +15,36 @@ struct Arguments {
   )]
   hosted_zone_id: Option<String>,
 
-  #[arg(long, help = "DNS record name to update (e.g. service.example.com)")]
+  #[arg(
+    long,
+    value_name = "NAME",
+    help = "DNS record name to update (e.g. service.example.com)"
+  )]
   dns_name: String,
 
   #[arg(
     long,
     value_enum,
+    value_name = "TYPE",
     help = "DNS record type (optional, is auto-detected from --dns-value or --value-from-url when possible, TXT is used as fallback)"
   )]
   dns_type: Option<aws_sdk_route53::types::RrType>,
 
-  #[arg(long, help = "DNS record value")]
+  #[arg(long, value_name = "VALUE", help = "DNS record value")]
   dns_value: Option<String>,
 
   #[arg(
     long,
+    value_name = "URL",
     help = "Get the value from a URL (e.g. https://checkip.amazonaws.com/)"
   )]
   value_from_url: Option<String>,
+
+  #[arg(
+    long,
+    help = "TTL for the DNS record (optional, if an existing record exists then its TTL will be copied, 300 is used as fallback)"
+  )]
+  ttl: Option<i64>,
 
   #[arg(long, help = "Wait for the change to propagate in Route 53")]
   wait: bool,
@@ -122,7 +134,13 @@ async fn main() -> Result<(), std::io::Error> {
           panic!("could not find the hosted zone for: {}", args.dns_name);
         }
       } else if zones.len() == 1 {
-        args.hosted_zone_id = Some(zones.first().unwrap().id().unwrap().to_string());
+        let zone = zones.first().unwrap();
+        args.hosted_zone_id = Some(zone.id().unwrap().to_string());
+        eprintln!(
+          "Found hosted zone: {} ({})",
+          zone.id().unwrap(),
+          zone.name().unwrap()
+        );
         break;
       } else {
         panic!("multiple zones with name: {}", search_name);
@@ -130,56 +148,74 @@ async fn main() -> Result<(), std::io::Error> {
     }
   }
 
-  if args.clear {
-    let hosted_zone_id = args.hosted_zone_id.clone().unwrap();
+  let hosted_zone_id = args.hosted_zone_id.clone().unwrap();
+  if args.ttl.is_none() || args.clear {
     let response = route53_client
       .list_resource_record_sets()
       .hosted_zone_id(hosted_zone_id.clone())
       .send()
       .await
       .expect("could not list record sets");
+
     if response.is_truncated() {
       eprintln!("This zone has a lot of record sets and this program does not paginate yet, so --clear might clear everything.");
     }
 
-    // To avoid errors of the following kind, we have to delete records before we UPSERT:
-    // RRSet of type CNAME with DNS name service.example.com. is not permitted as it conflicts with other records with the same DNS name in zone example.com.
-
-    let mut change_batch_builder = aws_sdk_route53::types::ChangeBatch::builder();
-    for r in response
-      .resource_record_sets()
-      .unwrap()
-      .into_iter()
-      .filter(|r| r.name() == Some(&args.dns_name))
-      .filter(|r| {
-        args.dns_type == Some(RrType::Cname)
-          || (r.r#type() == Some(&RrType::A)
-            || r.r#type() == Some(&RrType::Aaaa)
-            || r.r#type() == Some(&RrType::Cname))
-      })
-      .filter(|r| r.r#type() != args.dns_type.clone().as_ref())
-    {
-      let change = aws_sdk_route53::types::Change::builder()
-        .action(aws_sdk_route53::types::ChangeAction::Delete)
-        .resource_record_set(r.clone())
-        .build();
-      change_batch_builder = change_batch_builder.changes(change);
-      eprintln!(
-        "Will delete {} {}",
-        r.r#type().unwrap().as_str(),
-        r.name().unwrap()
-      )
+    if args.ttl.is_none() {
+      args.ttl = response
+        .resource_record_sets()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.name() == Some(&args.dns_name) && r.r#type() == args.dns_type.as_ref())
+        .map(|r| r.ttl().unwrap());
+      if args.ttl.is_some() {
+        eprintln!("Copied TTL from existing record: {}", args.ttl.unwrap())
+      } else {
+        args.ttl = Some(300);
+        eprintln!("Using default TTL: {}", args.ttl.unwrap())
+      }
     }
 
-    let change_batch = change_batch_builder.build();
-    if change_batch.changes().is_some() {
-      route53_client
-        .change_resource_record_sets()
-        .hosted_zone_id(hosted_zone_id.clone())
-        .change_batch(change_batch)
-        .send()
-        .await
-        .expect("could not delete DNS records");
+    if args.clear {
+      // To avoid errors of the following kind, we have to delete records before we UPSERT:
+      // RRSet of type CNAME with DNS name service.example.com. is not permitted as it conflicts with other records with the same DNS name in zone example.com.
+
+      let mut change_batch_builder = aws_sdk_route53::types::ChangeBatch::builder();
+      for r in response
+        .resource_record_sets()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.name() == Some(&args.dns_name))
+        .filter(|r| {
+          args.dns_type == Some(RrType::Cname)
+            || (r.r#type() == Some(&RrType::A)
+              || r.r#type() == Some(&RrType::Aaaa)
+              || r.r#type() == Some(&RrType::Cname))
+        })
+        .filter(|r| r.r#type() != args.dns_type.clone().as_ref())
+      {
+        let change = aws_sdk_route53::types::Change::builder()
+          .action(aws_sdk_route53::types::ChangeAction::Delete)
+          .resource_record_set(r.clone())
+          .build();
+        change_batch_builder = change_batch_builder.changes(change);
+        eprintln!(
+          "Will delete {} {}",
+          r.r#type().unwrap().as_str(),
+          r.name().unwrap()
+        )
+      }
+
+      let change_batch = change_batch_builder.build();
+      if change_batch.changes().is_some() {
+        route53_client
+          .change_resource_record_sets()
+          .hosted_zone_id(hosted_zone_id.clone())
+          .change_batch(change_batch)
+          .send()
+          .await
+          .expect("could not delete DNS records");
+      }
     }
   }
 
@@ -187,7 +223,7 @@ async fn main() -> Result<(), std::io::Error> {
     .set_value(args.dns_value)
     .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
-    .ttl(300)
+    .set_ttl(args.ttl)
     .name(args.dns_name.clone())
     .set_type(args.dns_type.clone())
     .resource_records(rr)
