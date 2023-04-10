@@ -36,6 +36,9 @@ struct Arguments {
 
   #[arg(long, help = "Wait for the change to propagate in Route 53")]
   wait: bool,
+
+  #[arg(long, help = "Delete potentially conflicting records (A, AAAA, CNAME)")]
+  clear: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -46,9 +49,15 @@ async fn main() -> Result<(), std::io::Error> {
   } else if args.dns_value.is_none() && args.value_from_url.is_none() {
     panic!("value must be supplied with --dns-value or --value-from-url.");
   } else if args.dns_type.is_some() {
-    if matches!(args.dns_type.clone().unwrap(), RrType::Unknown(_)) {
+    if matches!(args.dns_type, Some(RrType::Unknown(_))) {
       panic!("unknown DNS type: {:?}", args.dns_type.unwrap());
+    } else if args.dns_type == Some(RrType::Txt) && args.clear {
+      panic!("--clear only works with A, AAAA, or CNAME");
     }
+  }
+
+  if !args.dns_name.ends_with(".") {
+    args.dns_name = args.dns_name + ".";
   }
 
   if args.value_from_url.is_some() {
@@ -68,10 +77,13 @@ async fn main() -> Result<(), std::io::Error> {
 
   if args.dns_type.is_none() {
     args.dns_type = Some(detect_record_type(args.dns_value.clone().unwrap().as_str()));
+    if args.dns_type == Some(RrType::Txt) && args.clear {
+      panic!("--clear only works with A, AAAA, or CNAME");
+    }
   }
 
   // TXT records must be enclosed in quotes
-  if matches!(args.dns_type.clone().unwrap(), RrType::Txt) {
+  if matches!(args.dns_type, Some(RrType::Txt)) {
     let v = args.dns_value.clone().unwrap();
     if !v.starts_with('"') && !v.ends_with('"') {
       args.dns_value = Some(format!("\"{}\"", v));
@@ -84,23 +96,6 @@ async fn main() -> Result<(), std::io::Error> {
   let route53_config = aws_sdk_route53::config::Builder::from(&shared_config);
   let route53_client = aws_sdk_route53::client::Client::from_conf(route53_config.build());
 
-  let rr = aws_sdk_route53::types::ResourceRecord::builder()
-    .set_value(args.dns_value)
-    .build();
-  let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
-    .ttl(300)
-    .name(args.dns_name.clone())
-    .set_type(args.dns_type)
-    .resource_records(rr)
-    .build();
-  let change = aws_sdk_route53::types::Change::builder()
-    .action(aws_sdk_route53::types::ChangeAction::Upsert)
-    .resource_record_set(rrs)
-    .build();
-  let change_batch = aws_sdk_route53::types::ChangeBatch::builder()
-    .changes(change)
-    .build();
-
   if args.hosted_zone_id.is_none() {
     let response = route53_client
       .list_hosted_zones()
@@ -112,10 +107,6 @@ async fn main() -> Result<(), std::io::Error> {
     }
 
     let mut search_name = args.dns_name.clone();
-    if !search_name.ends_with(".") {
-      search_name = search_name + ".";
-    }
-
     loop {
       let zones: Vec<_> = response
         .hosted_zones()
@@ -138,6 +129,76 @@ async fn main() -> Result<(), std::io::Error> {
       }
     }
   }
+
+  if args.clear {
+    let hosted_zone_id = args.hosted_zone_id.clone().unwrap();
+    let response = route53_client
+      .list_resource_record_sets()
+      .hosted_zone_id(hosted_zone_id.clone())
+      .send()
+      .await
+      .expect("could not list record sets");
+    if response.is_truncated() {
+      eprintln!("This zone has a lot of record sets and this program does not paginate yet, so --clear might clear everything.");
+    }
+
+    // To avoid errors of the following kind, we have to delete records before we UPSERT:
+    // RRSet of type CNAME with DNS name service.example.com. is not permitted as it conflicts with other records with the same DNS name in zone example.com.
+
+    let mut change_batch_builder = aws_sdk_route53::types::ChangeBatch::builder();
+    for r in response
+      .resource_record_sets()
+      .unwrap()
+      .into_iter()
+      .filter(|r| r.name() == Some(&args.dns_name))
+      .filter(|r| {
+        args.dns_type == Some(RrType::Cname)
+          || (r.r#type() == Some(&RrType::A)
+            || r.r#type() == Some(&RrType::Aaaa)
+            || r.r#type() == Some(&RrType::Cname))
+      })
+      .filter(|r| r.r#type() != args.dns_type.clone().as_ref())
+    {
+      let change = aws_sdk_route53::types::Change::builder()
+        .action(aws_sdk_route53::types::ChangeAction::Delete)
+        .resource_record_set(r.clone())
+        .build();
+      change_batch_builder = change_batch_builder.changes(change);
+      eprintln!(
+        "Will delete {} {}",
+        r.r#type().unwrap().as_str(),
+        r.name().unwrap()
+      )
+    }
+
+    let change_batch = change_batch_builder.build();
+    if change_batch.changes().is_some() {
+      route53_client
+        .change_resource_record_sets()
+        .hosted_zone_id(hosted_zone_id.clone())
+        .change_batch(change_batch)
+        .send()
+        .await
+        .expect("could not delete DNS records");
+    }
+  }
+
+  let rr = aws_sdk_route53::types::ResourceRecord::builder()
+    .set_value(args.dns_value)
+    .build();
+  let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
+    .ttl(300)
+    .name(args.dns_name.clone())
+    .set_type(args.dns_type.clone())
+    .resource_records(rr)
+    .build();
+  let change = aws_sdk_route53::types::Change::builder()
+    .action(aws_sdk_route53::types::ChangeAction::Upsert)
+    .resource_record_set(rrs)
+    .build();
+  let change_batch = aws_sdk_route53::types::ChangeBatch::builder()
+    .changes(change)
+    .build();
 
   let response = route53_client
     .change_resource_record_sets()
