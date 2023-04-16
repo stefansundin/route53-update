@@ -26,12 +26,12 @@ struct Arguments {
     long,
     value_enum,
     value_name = "TYPE",
-    help = "Record type (optional, is auto-detected from --record-value or --value-from-url when possible, TXT is used as fallback)"
+    help = "Record type (optional, is auto-detected from --value or --value-from-url when possible, TXT is used as fallback)"
   )]
   record_type: Option<aws_sdk_route53::types::RrType>,
 
-  #[arg(long, value_name = "VALUE", help = "Record value")]
-  record_value: Option<String>,
+  #[arg(short, long, value_name = "VALUE", help = "Record value")]
+  value: Vec<String>,
 
   #[arg(
     long,
@@ -56,10 +56,10 @@ struct Arguments {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), std::io::Error> {
   let mut args = Arguments::parse();
-  if args.record_value.is_some() && args.value_from_url.is_some() {
-    panic!("can't use both --record-value and --value-from-url.");
-  } else if args.record_value.is_none() && args.value_from_url.is_none() {
-    panic!("value must be supplied with --record-value or --value-from-url.");
+  if !args.value.is_empty() && args.value_from_url.is_some() {
+    panic!("can't use both --value and --value-from-url.");
+  } else if args.value.is_empty() && args.value_from_url.is_none() {
+    panic!("value must be supplied with --value or --value-from-url.");
   } else if args.record_type.is_some() {
     if matches!(args.record_type, Some(RrType::Unknown(_))) {
       panic!("unknown DNS type: {:?}", args.record_type.unwrap());
@@ -84,13 +84,16 @@ async fn main() -> Result<(), std::io::Error> {
     }
     let response_text = response.text().await.unwrap().trim().to_string();
     eprintln!("{} returned {:?}", url, response_text);
-    args.record_value = Some(response_text);
+    args.value = vec![response_text];
+  }
+
+  // Sanity check
+  if args.value.is_empty() {
+    panic!("somehow value is {:?}", args.value);
   }
 
   if args.record_type.is_none() {
-    args.record_type = Some(detect_record_type(
-      args.record_value.clone().unwrap().as_str(),
-    ));
+    args.record_type = Some(detect_record_type(args.value.clone()));
     if args.record_type == Some(RrType::Txt) && args.clear {
       panic!("--clear only works with A, AAAA, or CNAME");
     }
@@ -98,10 +101,17 @@ async fn main() -> Result<(), std::io::Error> {
 
   // TXT records must be enclosed in quotes
   if matches!(args.record_type, Some(RrType::Txt)) {
-    let v = args.record_value.clone().unwrap();
-    if !v.starts_with('"') && !v.ends_with('"') {
-      args.record_value = Some(format!("\"{}\"", v));
-    }
+    args.value = args
+      .value
+      .into_iter()
+      .map(|v: String| {
+        if v.starts_with('"') && v.ends_with('"') {
+          v
+        } else {
+          format!("\"{}\"", v)
+        }
+      })
+      .collect();
   }
 
   let region_provider =
@@ -221,14 +231,21 @@ async fn main() -> Result<(), std::io::Error> {
     }
   }
 
-  let rr = aws_sdk_route53::types::ResourceRecord::builder()
-    .set_value(args.record_value)
-    .build();
   let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
     .set_ttl(args.ttl)
     .name(args.record_name.clone())
     .set_type(args.record_type.clone())
-    .resource_records(rr)
+    .set_resource_records(Some(
+      args
+        .value
+        .into_iter()
+        .map(|v| {
+          aws_sdk_route53::types::ResourceRecord::builder()
+            .value(v)
+            .build()
+        })
+        .collect(),
+    ))
     .build();
   let change = aws_sdk_route53::types::Change::builder()
     .action(aws_sdk_route53::types::ChangeAction::Upsert)
@@ -272,18 +289,17 @@ async fn main() -> Result<(), std::io::Error> {
   return Ok(());
 }
 
-fn detect_record_type(text: &str) -> RrType {
-  let addr = text.parse::<IpAddr>();
-  if addr.is_ok() {
-    let unwrapped_addr = addr.unwrap();
-    if unwrapped_addr.is_ipv4() {
-      aws_sdk_route53::types::RrType::A
-    } else if unwrapped_addr.is_ipv6() {
-      aws_sdk_route53::types::RrType::Aaaa
-    } else {
-      panic!();
+fn detect_record_type(v: Vec<String>) -> RrType {
+  let mut addrs = v.into_iter().map(|text| text.parse::<IpAddr>());
+  if addrs.all(|addr| addr.is_ok()) {
+    if addrs.all(|addr| addr.unwrap().is_ipv4()) {
+      return aws_sdk_route53::types::RrType::A;
+    } else if addrs.all(|addr| addr.unwrap().is_ipv6()) {
+      return aws_sdk_route53::types::RrType::Aaaa;
     }
-  } else {
-    aws_sdk_route53::types::RrType::Txt
+    // else {
+    //   TODO: Support a mix of IPv4 and IPv6 and set both A and AAAA records
+    // }
   }
+  aws_sdk_route53::types::RrType::Txt
 }
