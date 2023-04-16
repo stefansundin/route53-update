@@ -1,4 +1,4 @@
-This is a tiny program that can update a DNS record in Amazon Route 53.
+This is a tiny program that can update DNS records in Amazon Route 53.
 
 The program is brand new so the command line arguments may change. Use with caution.
 
@@ -15,11 +15,15 @@ Options:
       --record-name <NAME>
           Record name to update (e.g. service.example.com)
       --record-type <TYPE>
-          Record type (optional, is auto-detected from --record-value or --value-from-url when possible, TXT is used as fallback)
-      --record-value <VALUE>
+          Record type (optional, is auto-detected from --value or --value-from-url when possible, TXT is used as fallback)
+  -v, --value <VALUE>
           Record value
+      --value-from <SOURCE>
+          Get the value from a specific source (supported: 'auto')
       --value-from-url <URL>
           Get the value from a URL (e.g. https://checkip.amazonaws.com/)
+      --ip-address-type <TYPE>
+          Use a specific IP address type (supported: 'public' or 'private')
       --ttl <TTL>
           TTL for the DNS record (optional, if an existing record exists then its TTL will be copied, 300 is used as fallback)
       --wait
