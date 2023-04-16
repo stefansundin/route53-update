@@ -1,9 +1,11 @@
 // Copyright 2023 Stefan Sundin
 // Licensed under GNU GPL v3 or later
 
+pub mod types;
+pub mod utils;
+
 use aws_sdk_route53::types::{ChangeStatus, RrType};
 use clap::Parser;
-use std::net::IpAddr;
 use std::{thread, time};
 
 #[derive(Parser)]
@@ -35,10 +37,26 @@ struct Arguments {
 
   #[arg(
     long,
+    value_enum,
+    value_name = "SOURCE",
+    help = "Get the value from a specific source (supported: 'auto')"
+  )]
+  value_from: Option<types::ValueFromSource>,
+
+  #[arg(
+    long,
     value_name = "URL",
     help = "Get the value from a URL (e.g. https://checkip.amazonaws.com/)"
   )]
   value_from_url: Option<String>,
+
+  #[arg(
+    long,
+    value_enum,
+    value_name = "TYPE",
+    help = "Use a specific IP address type (supported: 'public' or 'private')"
+  )]
+  ip_address_type: Option<types::IPAddressType>,
 
   #[arg(
     long,
@@ -56,10 +74,13 @@ struct Arguments {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), std::io::Error> {
   let mut args = Arguments::parse();
-  if !args.value.is_empty() && args.value_from_url.is_some() {
-    panic!("can't use both --value and --value-from-url.");
-  } else if args.value.is_empty() && args.value_from_url.is_none() {
-    panic!("value must be supplied with --value or --value-from-url.");
+  if !args.value.is_empty() && args.value_from.is_some()
+    || !args.value.is_empty() && args.value_from_url.is_some()
+    || args.value_from.is_some() && args.value_from_url.is_some()
+  {
+    panic!("can only use one of --value, --value-from, or --value-from-url.");
+  } else if args.value.is_empty() && args.value_from.is_none() && args.value_from_url.is_none() {
+    panic!("value must be supplied with either --value, --value-from, or --value-from-url.");
   } else if args.record_type.is_some() {
     if matches!(args.record_type, Some(RrType::Unknown(_))) {
       panic!("unknown DNS type: {:?}", args.record_type.unwrap());
@@ -72,7 +93,31 @@ async fn main() -> Result<(), std::io::Error> {
     args.record_name = args.record_name + ".";
   }
 
-  if args.value_from_url.is_some() {
+  if args.value_from.is_some() {
+    let source = args.value_from.unwrap();
+    if source == types::ValueFromSource::Auto {
+      if let Some(ecs_task_metadata) = utils::get_ecs_task_metadata().await {
+        eprintln!("ecs_task_metadata: {:?}", ecs_task_metadata);
+        // This naively grabs the IP for first container in the task, this should perhaps be configurable.
+        // If you use awsvpc networking mode then all the containers will have the same IP.
+        let network = ecs_task_metadata
+          .containers
+          .first()
+          .unwrap()
+          .networks
+          .first()
+          .unwrap();
+        if args.record_type == Some(RrType::A) && network.ipv4_addresses.is_some() {
+          args.value = network.ipv4_addresses.clone().unwrap();
+        } else if args.record_type == Some(RrType::A) && network.ipv6_addresses.is_some() {
+          args.value = network.ipv6_addresses.clone().unwrap();
+        }
+      } else {
+        // TODO: Try the ec2 metadata endpoint
+        panic!("unable to detect environment (--value-from auto)")
+      }
+    }
+  } else if args.value_from_url.is_some() {
     let url = args.value_from_url.unwrap();
     let response = reqwest::get(url.as_str()).await.unwrap();
     if response.status() != reqwest::StatusCode::OK {
@@ -93,7 +138,7 @@ async fn main() -> Result<(), std::io::Error> {
   }
 
   if args.record_type.is_none() {
-    args.record_type = Some(detect_record_type(args.value.clone()));
+    args.record_type = Some(utils::detect_record_type(args.value.clone()));
     if args.record_type == Some(RrType::Txt) && args.clear {
       panic!("--clear only works with A, AAAA, or CNAME");
     }
@@ -287,19 +332,4 @@ async fn main() -> Result<(), std::io::Error> {
   }
 
   return Ok(());
-}
-
-fn detect_record_type(v: Vec<String>) -> RrType {
-  let mut addrs = v.into_iter().map(|text| text.parse::<IpAddr>());
-  if addrs.all(|addr| addr.is_ok()) {
-    if addrs.all(|addr| addr.unwrap().is_ipv4()) {
-      return aws_sdk_route53::types::RrType::A;
-    } else if addrs.all(|addr| addr.unwrap().is_ipv6()) {
-      return aws_sdk_route53::types::RrType::Aaaa;
-    }
-    // else {
-    //   TODO: Support a mix of IPv4 and IPv6 and set both A and AAAA records
-    // }
-  }
-  aws_sdk_route53::types::RrType::Txt
 }
