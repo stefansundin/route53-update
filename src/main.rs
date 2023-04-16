@@ -238,6 +238,8 @@ async fn main() -> Result<(), std::io::Error> {
     .changes(change)
     .build();
 
+  eprintln!("{:?}", change_batch);
+
   let response = route53_client
     .change_resource_record_sets()
     .set_hosted_zone_id(args.hosted_zone_id)
