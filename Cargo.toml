@@ -13,3 +13,22 @@ reqwest = { version = "0.11.16", features = ["json"] }
 serde = { version = "1.0.160", features = ["derive"] }
 time = "0.3.20"
 tokio = { version = "1.27.0", features = ["macros"] }
+
+[profile.release]
+strip = true
+
+[profile.release-build]
+inherits = "release"
+opt-level = "z"
+strip = true
+debug = false
+lto = true
+codegen-units = 1
+
+[profile.debug-build]
+inherits = "release"
+opt-level = "z"
+strip = false
+debug = true
+lto = true
+codegen-units = 1
