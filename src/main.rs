@@ -73,6 +73,8 @@ struct Arguments {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), std::io::Error> {
+  env_logger::init();
+
   let mut args = Arguments::parse();
   if !args.value.is_empty() && args.value_from.is_some()
     || !args.value.is_empty() && args.value_from_url.is_some()
