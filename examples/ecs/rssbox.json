@@ -1,0 +1,52 @@
+[
+  {
+    "name": "rssbox",
+    "image": "public.ecr.aws/stefansundin/rssbox:latest",
+    "essential": true,
+    "user": "root",
+    "portMappings": [
+      {
+        "protocol": "tcp",
+        "containerPort": 80,
+        "hostPort": 80
+      }
+    ],
+    "environment": [
+      {
+        "name": "PORT",
+        "value": "80"
+      }
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-region": "us-west-2",
+        "awslogs-group": "rssbox",
+        "awslogs-stream-prefix": "rssbox"
+      }
+    }
+  },
+  {
+    "name": "route53-update",
+    "image": "public.ecr.aws/stefansundin/route53-update:beta",
+    "essential": false,
+    "command": [
+      "--record-type",
+      "A",
+      "--record-name",
+      "rssbox.example.com",
+      "--value-from",
+      "auto",
+      "--ip-address-type",
+      "public"
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-region": "us-west-2",
+        "awslogs-group": "rssbox",
+        "awslogs-stream-prefix": "route53-update"
+      }
+    }
+  }
+]
