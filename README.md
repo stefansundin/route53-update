@@ -4,6 +4,24 @@ The program is brand new so the command line arguments may change. Use with caut
 
 Please note that some features like `--clear` will delete records which can be disastrous if used incorrectly. Please do not experiment in a production environment!
 
+## Installation
+
+I will publish precompiled binaries once the program has become more stable. For the time being, you can compile from source by running the following command:
+
+```
+cargo install --git https://github.com/stefansundin/route53-update.git --branch main
+```
+
+## Docker
+
+There's a beta docker image available on ECR: https://gallery.ecr.aws/stefansundin/route53-update
+
+```
+public.ecr.aws/stefansundin/route53-update:beta
+```
+
+For example usage with Amazon ECS, see [examples](examples).
+
 ## Usage
 
 ```
