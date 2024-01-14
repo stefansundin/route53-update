@@ -83,12 +83,8 @@ async fn main() -> Result<(), std::io::Error> {
     panic!("can only use one of --value, --value-from, or --value-from-url.");
   } else if args.value.is_empty() && args.value_from.is_none() && args.value_from_url.is_none() {
     panic!("value must be supplied with either --value, --value-from, or --value-from-url.");
-  } else if args.record_type.is_some() {
-    if matches!(args.record_type, Some(RrType::Unknown(_))) {
-      panic!("unknown DNS type: {:?}", args.record_type.unwrap());
-    } else if args.record_type == Some(RrType::Txt) && args.clear {
-      panic!("--clear only works with A, AAAA, or CNAME");
-    }
+  } else if args.record_type.is_some() && args.record_type == Some(RrType::Txt) && args.clear {
+    panic!("--clear only works with A, AAAA, or CNAME");
   }
 
   if !args.record_name.ends_with(".") {
@@ -163,7 +159,10 @@ async fn main() -> Result<(), std::io::Error> {
 
   let region_provider =
     aws_config::meta::region::RegionProviderChain::default_provider().or_else("us-east-1");
-  let shared_config = aws_config::from_env().region(region_provider).load().await;
+  let shared_config = aws_config::defaults(aws_config::BehaviorVersion::v2023_11_09())
+    .region(region_provider)
+    .load()
+    .await;
   let route53_config = aws_sdk_route53::config::Builder::from(&shared_config);
   let route53_client = aws_sdk_route53::client::Client::from_conf(route53_config.build());
 
@@ -181,9 +180,8 @@ async fn main() -> Result<(), std::io::Error> {
     loop {
       let zones: Vec<_> = response
         .hosted_zones()
-        .unwrap()
         .into_iter()
-        .filter(|zone| zone.name().unwrap().eq(&search_name))
+        .filter(|zone| zone.name().eq(&search_name))
         .collect();
       if zones.len() == 0 {
         let search_split = search_name.split_once(".");
@@ -194,12 +192,8 @@ async fn main() -> Result<(), std::io::Error> {
         }
       } else if zones.len() == 1 {
         let zone = zones.first().unwrap();
-        args.hosted_zone_id = Some(zone.id().unwrap().to_string());
-        eprintln!(
-          "Found hosted zone: {} ({})",
-          zone.id().unwrap(),
-          zone.name().unwrap()
-        );
+        args.hosted_zone_id = Some(zone.id().to_string());
+        eprintln!("Found hosted zone: {} ({})", zone.id(), zone.name());
         break;
       } else {
         panic!("multiple zones with name: {}", search_name);
@@ -223,9 +217,8 @@ async fn main() -> Result<(), std::io::Error> {
     if args.ttl.is_none() {
       args.ttl = response
         .resource_record_sets()
-        .unwrap()
         .into_iter()
-        .find(|r| r.name() == Some(&args.record_name) && r.r#type() == args.record_type.as_ref())
+        .find(|r| r.name() == &args.record_name && Some(r.r#type()) == args.record_type.as_ref())
         .map(|r| r.ttl().unwrap());
       if args.ttl.is_some() {
         eprintln!("Copied TTL from existing record: {}", args.ttl.unwrap())
@@ -242,31 +235,29 @@ async fn main() -> Result<(), std::io::Error> {
       let mut change_batch_builder = aws_sdk_route53::types::ChangeBatch::builder();
       for r in response
         .resource_record_sets()
-        .unwrap()
         .into_iter()
-        .filter(|r| r.name() == Some(&args.record_name))
+        .filter(|r| r.name() == &args.record_name)
         .filter(|r| {
           args.record_type == Some(RrType::Cname)
-            || (r.r#type() == Some(&RrType::A)
-              || r.r#type() == Some(&RrType::Aaaa)
-              || r.r#type() == Some(&RrType::Cname))
+            || (r.r#type() == &RrType::A
+              || r.r#type() == &RrType::Aaaa
+              || r.r#type() == &RrType::Cname)
         })
-        .filter(|r| r.r#type() != args.record_type.clone().as_ref())
+        .filter(|r| Some(r.r#type()) != args.record_type.as_ref())
       {
         let change = aws_sdk_route53::types::Change::builder()
           .action(aws_sdk_route53::types::ChangeAction::Delete)
           .resource_record_set(r.clone())
-          .build();
+          .build()
+          .expect("error building change set");
         change_batch_builder = change_batch_builder.changes(change);
-        eprintln!(
-          "Will delete {} {}",
-          r.r#type().unwrap().as_str(),
-          r.name().unwrap()
-        )
+        eprintln!("Will delete {} {}", r.r#type().as_str(), r.name())
       }
 
-      let change_batch = change_batch_builder.build();
-      if change_batch.changes().is_some() {
+      let change_batch = change_batch_builder
+        .build()
+        .expect("error building change batch");
+      if !change_batch.changes().is_empty() {
         route53_client
           .change_resource_record_sets()
           .hosted_zone_id(hosted_zone_id.clone())
@@ -290,17 +281,21 @@ async fn main() -> Result<(), std::io::Error> {
           aws_sdk_route53::types::ResourceRecord::builder()
             .value(v)
             .build()
+            .expect("error building resource record")
         })
         .collect(),
     ))
-    .build();
+    .build()
+    .expect("error building resource record set");
   let change = aws_sdk_route53::types::Change::builder()
     .action(aws_sdk_route53::types::ChangeAction::Upsert)
     .resource_record_set(rrs)
-    .build();
+    .build()
+    .expect("error building change set");
   let change_batch = aws_sdk_route53::types::ChangeBatch::builder()
     .changes(change)
-    .build();
+    .build()
+    .expect("error building change batch");
 
   eprintln!("{:?}", change_batch);
 
@@ -315,7 +310,7 @@ async fn main() -> Result<(), std::io::Error> {
   println!("{:?}", response);
 
   if args.wait {
-    let change_id = response.change_info().unwrap().id().unwrap();
+    let change_id = response.change_info().unwrap().id();
 
     loop {
       thread::sleep(time::Duration::from_millis(1000));
@@ -326,7 +321,7 @@ async fn main() -> Result<(), std::io::Error> {
         .await
         .expect("could not poll change status");
       eprintln!("{:?}", response);
-      let change_status = response.change_info().unwrap().status().unwrap();
+      let change_status = response.change_info().unwrap().status();
       if matches!(change_status, ChangeStatus::Insync) {
         break;
       }
