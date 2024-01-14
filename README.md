@@ -35,7 +35,7 @@ Options:
       --record-type <TYPE>
           Record type (optional, is auto-detected from --value or --value-from-url when possible, TXT is used as fallback)
   -v, --value <VALUE>
-          Record value
+          Record value (can be specified multiple times)
       --value-from <SOURCE>
           Get the value from a specific source (supported: 'auto')
       --value-from-url <URL>

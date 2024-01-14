@@ -32,7 +32,12 @@ struct Arguments {
   )]
   record_type: Option<aws_sdk_route53::types::RrType>,
 
-  #[arg(short, long, value_name = "VALUE", help = "Record value")]
+  #[arg(
+    short,
+    long,
+    value_name = "VALUE",
+    help = "Record value (can be specified multiple times)"
+  )]
   value: Vec<String>,
 
   #[arg(
