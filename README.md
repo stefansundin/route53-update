@@ -8,7 +8,7 @@ Please note that some features like `--clear` will delete records which can be d
 
 I will publish precompiled binaries once the program has become more stable. For the time being, you can compile from source by running the following command:
 
-```
+```shell
 cargo install --git https://github.com/stefansundin/route53-update.git --branch main
 ```
 
