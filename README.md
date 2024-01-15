@@ -30,6 +30,8 @@ Usage: route53-update [OPTIONS] --record-name <NAME>
 Options:
       --hosted-zone-id <HOSTED_ZONE_ID>
           The Hosted Zone ID (optional, will be looked up automatically based on --record-name if omitted)
+      --hosted-zone-name <HOSTED_ZONE_NAME>
+          Look up the Hosted Zone ID based on this name instead of using the record name (optional, conflicts with --hosted-zone-id)
       --record-name <NAME>
           Record name to update (e.g. service.example.com)
       --record-type <TYPE>

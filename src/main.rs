@@ -21,6 +21,12 @@ struct Arguments {
 
   #[arg(
     long,
+    help = "Look up the Hosted Zone ID based on this name instead of using the record name (optional, conflicts with --hosted-zone-id)"
+  )]
+  hosted_zone_name: Option<String>,
+
+  #[arg(
+    long,
     value_name = "NAME",
     help = "Record name to update (e.g. service.example.com)"
   )]
@@ -84,7 +90,9 @@ async fn main() -> Result<(), std::io::Error> {
   env_logger::init();
 
   let mut args = Arguments::parse();
-  if !args.value.is_empty() && args.value_from.is_some()
+  if args.hosted_zone_id.is_some() && args.hosted_zone_name.is_some() {
+    panic!("can only use one of --hosted-zone-id or --hosted-zone-name.");
+  } else if !args.value.is_empty() && args.value_from.is_some()
     || !args.value.is_empty() && args.value_from_url.is_some()
     || args.value_from.is_some() && args.value_from_url.is_some()
   {
@@ -212,28 +220,50 @@ async fn main() -> Result<(), std::io::Error> {
       panic!("you have a lot of hosted zones and this program does not paginate yet, please use --hosted-zone-id");
     }
 
-    let mut search_name = args.record_name.clone();
-    loop {
-      let zones: Vec<_> = response
+    let hosted_zone;
+    if let Some(mut hosted_zone_name) = args.hosted_zone_name {
+      if !hosted_zone_name.ends_with(".") {
+        hosted_zone_name = hosted_zone_name + ".";
+      }
+      hosted_zone = response
         .hosted_zones()
         .into_iter()
-        .filter(|zone| zone.name().eq(&search_name))
-        .collect();
-      if zones.len() == 0 {
-        let search_split = search_name.split_once(".");
-        if search_split.is_some() {
-          search_name = search_split.unwrap().1.to_string();
-        } else {
-          panic!("could not find the hosted zone for: {}", args.record_name);
-        }
-      } else if zones.len() == 1 {
-        let zone = zones.first().unwrap();
-        args.hosted_zone_id = Some(zone.id().to_string());
-        eprintln!("Found hosted zone: {} ({})", zone.id(), zone.name());
-        break;
-      } else {
-        panic!("multiple zones with name: {}", search_name);
+        .find(|zone| zone.name() == hosted_zone_name);
+      if hosted_zone.is_none() {
+        panic!(
+          "could not find a hosted zone with name: {}",
+          hosted_zone_name
+        );
       }
+    } else {
+      let mut search_name = args.record_name.clone();
+      loop {
+        let zones: Vec<_> = response
+          .hosted_zones()
+          .into_iter()
+          .filter(|zone| zone.name().eq(&search_name))
+          .collect();
+        if zones.len() == 0 {
+          let search_split = search_name.split_once(".");
+          if search_split.is_some() {
+            search_name = search_split.unwrap().1.to_string();
+          } else {
+            panic!("could not find the hosted zone for: {}", args.record_name);
+          }
+        } else if zones.len() == 1 {
+          hosted_zone = Some(zones.first().unwrap());
+          break;
+        } else {
+          panic!("multiple zones with name: {}", search_name);
+        }
+      }
+    }
+
+    if let Some(zone) = hosted_zone {
+      args.hosted_zone_id = Some(zone.id.to_string());
+      eprintln!("Found hosted zone: {} ({})", zone.id(), zone.name());
+    } else {
+      panic!("could not find the hosted zone");
     }
   }
 
