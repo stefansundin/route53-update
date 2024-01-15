@@ -85,6 +85,9 @@ struct Arguments {
   )]
   ttl: Option<i64>,
 
+  #[arg(long, help = "Change batch comment")]
+  comment: Option<String>,
+
   #[arg(long, help = "Wait for the change to propagate in Route 53")]
   wait: bool,
 
@@ -383,6 +386,7 @@ async fn main() -> Result<(), std::io::Error> {
     .expect("error building change set");
   let change_batch = ChangeBatch::builder()
     .changes(change)
+    .set_comment(args.comment)
     .build()
     .expect("error building change batch");
 

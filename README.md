@@ -48,6 +48,8 @@ Options:
           Use a specific IP address type (supported: 'public' or 'private') [default: public]
       --ttl <TTL>
           TTL for the DNS record (optional, if an existing record exists then its TTL will be copied, 300 is used as fallback)
+      --comment <COMMENT>
+          Change batch comment
       --wait
           Wait for the change to propagate in Route 53
       --clear
