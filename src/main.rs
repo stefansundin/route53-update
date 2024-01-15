@@ -111,7 +111,13 @@ async fn main() -> Result<(), std::io::Error> {
           .first()
           .unwrap();
         if args.record_type == Some(RrType::A) && network.ipv4_addresses.is_some() {
-          args.value = network.ipv4_addresses.clone().unwrap();
+          args.value = network
+            .ipv4_addresses
+            .clone()
+            .unwrap()
+            .into_iter()
+            .filter(|address| !address.is_empty()) // The ECS metadata service can annoyingly return "IPv4Addresses": [""]
+            .collect();
         } else if args.record_type == Some(RrType::Aaaa) && network.ipv6_addresses.is_some() {
           args.value = network.ipv6_addresses.clone().unwrap();
         }
