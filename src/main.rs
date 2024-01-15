@@ -10,6 +10,8 @@ use aws_sdk_route53::types::{
 use clap::Parser;
 use std::{thread, time};
 
+const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
+
 #[derive(Parser)]
 #[command(arg_required_else_help(true))]
 struct Arguments {
@@ -100,6 +102,10 @@ async fn main() -> Result<(), std::io::Error> {
   env_logger::init();
 
   let mut args = Arguments::parse();
+
+  let version = VERSION.unwrap_or("unknown");
+  eprintln!("route53-update version {}", version);
+
   if args.hosted_zone_id.is_some() && args.hosted_zone_name.is_some() {
     panic!("can only use one of --hosted-zone-id or --hosted-zone-name.");
   } else if !args.value.is_empty() && args.value_from.is_some()
