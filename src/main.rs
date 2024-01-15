@@ -112,7 +112,7 @@ async fn main() -> Result<(), std::io::Error> {
           .unwrap();
         if args.record_type == Some(RrType::A) && network.ipv4_addresses.is_some() {
           args.value = network.ipv4_addresses.clone().unwrap();
-        } else if args.record_type == Some(RrType::A) && network.ipv6_addresses.is_some() {
+        } else if args.record_type == Some(RrType::Aaaa) && network.ipv6_addresses.is_some() {
           args.value = network.ipv6_addresses.clone().unwrap();
         }
       } else {
