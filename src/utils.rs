@@ -10,15 +10,15 @@ pub fn detect_record_type(v: Vec<String>) -> RrType {
   let mut addrs = v.into_iter().map(|text| text.parse::<IpAddr>());
   if addrs.all(|addr| addr.is_ok()) {
     if addrs.all(|addr| addr.unwrap().is_ipv4()) {
-      return aws_sdk_route53::types::RrType::A;
+      return RrType::A;
     } else if addrs.all(|addr| addr.unwrap().is_ipv6()) {
-      return aws_sdk_route53::types::RrType::Aaaa;
+      return RrType::Aaaa;
     }
     // else {
     //   TODO: Support a mix of IPv4 and IPv6 and set both A and AAAA records
     // }
   }
-  aws_sdk_route53::types::RrType::Txt
+  RrType::Txt
 }
 
 // The data that is retrieved so far exists in the same location in both the V3 and V4 endpoints.

@@ -4,7 +4,9 @@
 pub mod types;
 pub mod utils;
 
-use aws_sdk_route53::types::{ChangeStatus, RrType};
+use aws_sdk_route53::types::{
+  Change, ChangeAction, ChangeBatch, ChangeStatus, ResourceRecord, ResourceRecordSet, RrType,
+};
 use clap::Parser;
 use std::{thread, time};
 
@@ -30,7 +32,7 @@ struct Arguments {
     value_name = "TYPE",
     help = "Record type (optional, is auto-detected from --value or --value-from-url when possible, TXT is used as fallback)"
   )]
-  record_type: Option<aws_sdk_route53::types::RrType>,
+  record_type: Option<RrType>,
 
   #[arg(
     short,
@@ -266,7 +268,7 @@ async fn main() -> Result<(), std::io::Error> {
       // To avoid errors of the following kind, we have to delete records before we UPSERT:
       // RRSet of type CNAME with DNS name service.example.com. is not permitted as it conflicts with other records with the same DNS name in zone example.com.
 
-      let mut change_batch_builder = aws_sdk_route53::types::ChangeBatch::builder();
+      let mut change_batch_builder = ChangeBatch::builder();
       for r in response
         .resource_record_sets()
         .into_iter()
@@ -279,8 +281,8 @@ async fn main() -> Result<(), std::io::Error> {
         })
         .filter(|r| Some(r.r#type()) != args.record_type.as_ref())
       {
-        let change = aws_sdk_route53::types::Change::builder()
-          .action(aws_sdk_route53::types::ChangeAction::Delete)
+        let change = Change::builder()
+          .action(ChangeAction::Delete)
           .resource_record_set(r.clone())
           .build()
           .expect("error building change set");
@@ -303,7 +305,7 @@ async fn main() -> Result<(), std::io::Error> {
     }
   }
 
-  let rrs = aws_sdk_route53::types::ResourceRecordSet::builder()
+  let rrs = ResourceRecordSet::builder()
     .set_ttl(args.ttl)
     .name(args.record_name.clone())
     .set_type(args.record_type.clone())
@@ -312,7 +314,7 @@ async fn main() -> Result<(), std::io::Error> {
         .value
         .into_iter()
         .map(|v| {
-          aws_sdk_route53::types::ResourceRecord::builder()
+          ResourceRecord::builder()
             .value(v)
             .build()
             .expect("error building resource record")
@@ -321,12 +323,12 @@ async fn main() -> Result<(), std::io::Error> {
     ))
     .build()
     .expect("error building resource record set");
-  let change = aws_sdk_route53::types::Change::builder()
-    .action(aws_sdk_route53::types::ChangeAction::Upsert)
+  let change = Change::builder()
+    .action(ChangeAction::Upsert)
     .resource_record_set(rrs)
     .build()
     .expect("error building change set");
-  let change_batch = aws_sdk_route53::types::ChangeBatch::builder()
+  let change_batch = ChangeBatch::builder()
     .changes(change)
     .build()
     .expect("error building change batch");
