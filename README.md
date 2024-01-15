@@ -32,6 +32,8 @@ Options:
           The Hosted Zone ID (optional, will be looked up automatically based on --record-name if omitted)
       --hosted-zone-name <HOSTED_ZONE_NAME>
           Look up the Hosted Zone ID based on this name instead of using the record name (optional, conflicts with --hosted-zone-id)
+      --hosted-zone-type <HOSTED_ZONE_TYPE>
+          Filter the hosted zones based on the type (supported: 'prefer-public', 'public' or 'private') [default: prefer-public]
       --record-name <NAME>
           Record name to update (e.g. service.example.com)
       --record-type <TYPE>

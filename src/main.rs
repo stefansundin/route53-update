@@ -27,6 +27,13 @@ struct Arguments {
 
   #[arg(
     long,
+    help = "Filter the hosted zones based on the type (supported: 'prefer-public', 'public' or 'private')",
+    default_value = "prefer-public"
+  )]
+  hosted_zone_type: types::HostedZoneType,
+
+  #[arg(
+    long,
     value_name = "NAME",
     help = "Record name to update (e.g. service.example.com)"
   )]
@@ -225,10 +232,14 @@ async fn main() -> Result<(), std::io::Error> {
       if !hosted_zone_name.ends_with(".") {
         hosted_zone_name = hosted_zone_name + ".";
       }
-      hosted_zone = response
-        .hosted_zones()
-        .into_iter()
-        .find(|zone| zone.name() == hosted_zone_name);
+      hosted_zone = utils::get_hosted_zone(
+        response
+          .hosted_zones()
+          .into_iter()
+          .filter(|zone| zone.name() == hosted_zone_name)
+          .collect(),
+        args.hosted_zone_type,
+      );
       if hosted_zone.is_none() {
         panic!(
           "could not find a hosted zone with name: {}",
@@ -237,24 +248,36 @@ async fn main() -> Result<(), std::io::Error> {
       }
     } else {
       let mut search_name = args.record_name.clone();
+      let mut hosted_zone_type = if args.hosted_zone_type == types::HostedZoneType::Public
+        || args.hosted_zone_type == types::HostedZoneType::PreferPublic
+      {
+        types::HostedZoneType::Public
+      } else {
+        types::HostedZoneType::Private
+      };
       loop {
-        let zones: Vec<_> = response
-          .hosted_zones()
-          .into_iter()
-          .filter(|zone| zone.name().eq(&search_name))
-          .collect();
-        if zones.len() == 0 {
+        let zone = utils::get_hosted_zone(
+          response
+            .hosted_zones()
+            .into_iter()
+            .filter(|zone| zone.name().eq(&search_name))
+            .collect(),
+          hosted_zone_type,
+        );
+        if zone.is_some() {
+          hosted_zone = zone;
+          break;
+        } else {
           let search_split = search_name.split_once(".");
           if search_split.is_some() {
             search_name = search_split.unwrap().1.to_string();
+          } else if args.hosted_zone_type == types::HostedZoneType::PreferPublic
+            && hosted_zone_type == types::HostedZoneType::Public
+          {
+            hosted_zone_type = types::HostedZoneType::Private;
           } else {
             panic!("could not find the hosted zone for: {}", args.record_name);
           }
-        } else if zones.len() == 1 {
-          hosted_zone = Some(zones.first().unwrap());
-          break;
-        } else {
-          panic!("multiple zones with name: {}", search_name);
         }
       }
     }

@@ -3,8 +3,25 @@
 
 use crate::types;
 
-use aws_sdk_route53::types::RrType;
+use aws_sdk_route53::types::{HostedZone, RrType};
 use std::net::IpAddr;
+
+pub fn get_hosted_zone(
+  zones: Vec<&HostedZone>,
+  hosted_zone_type: types::HostedZoneType,
+) -> Option<&HostedZone> {
+  let private_zone = hosted_zone_type == types::HostedZoneType::Private;
+  if let Some(zone) = zones.clone().into_iter().find(|z| {
+    z.config
+      .as_ref()
+      .is_some_and(|c| c.private_zone == private_zone)
+  }) {
+    return Some(zone);
+  } else if hosted_zone_type == types::HostedZoneType::PreferPublic {
+    return zones.first().copied();
+  }
+  None
+}
 
 pub fn detect_record_type(v: Vec<String>) -> RrType {
   let mut addrs = v.into_iter().map(|text| text.parse::<IpAddr>());

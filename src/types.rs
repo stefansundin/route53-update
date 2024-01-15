@@ -3,12 +3,29 @@
 
 use serde::Deserialize;
 
-#[derive(std::clone::Clone, std::cmp::Eq, std::cmp::PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum HostedZoneType {
+  PreferPublic,
+  Public,
+  Private,
+}
+impl From<&str> for HostedZoneType {
+  fn from(s: &str) -> Self {
+    match s {
+      "prefer-public" => HostedZoneType::PreferPublic,
+      "public" => HostedZoneType::Public,
+      "private" => HostedZoneType::Private,
+      v => panic!("unsupported value: {}", v),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum IPAddressType {
   Public,
   Private,
 }
-impl std::convert::From<&str> for IPAddressType {
+impl From<&str> for IPAddressType {
   fn from(s: &str) -> Self {
     match s {
       "public" => IPAddressType::Public,
@@ -18,13 +35,13 @@ impl std::convert::From<&str> for IPAddressType {
   }
 }
 
-#[derive(std::clone::Clone, std::cmp::Eq, std::cmp::PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueFromSource {
   Auto,
   Ec2Metadata,
   EcsMetadata,
 }
-impl std::convert::From<&str> for ValueFromSource {
+impl From<&str> for ValueFromSource {
   fn from(s: &str) -> Self {
     match s {
       "auto" => ValueFromSource::Auto,
