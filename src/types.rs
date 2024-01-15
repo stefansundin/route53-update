@@ -21,11 +21,15 @@ impl std::convert::From<&str> for IPAddressType {
 #[derive(std::clone::Clone, std::cmp::Eq, std::cmp::PartialEq)]
 pub enum ValueFromSource {
   Auto,
+  Ec2Metadata,
+  EcsMetadata,
 }
 impl std::convert::From<&str> for ValueFromSource {
   fn from(s: &str) -> Self {
     match s {
       "auto" => ValueFromSource::Auto,
+      "ec2-metadata" => ValueFromSource::Ec2Metadata,
+      "ecs-metadata" => ValueFromSource::EcsMetadata,
       v => panic!("unsupported value: {}", v),
     }
   }

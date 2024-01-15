@@ -44,7 +44,7 @@ struct Arguments {
     long,
     value_enum,
     value_name = "SOURCE",
-    help = "Get the value from a specific source (supported: 'auto')"
+    help = "Get the value from a specific source (supported: 'auto', 'ec2-metadata', or 'ecs-metadata')"
   )]
   value_from: Option<types::ValueFromSource>,
 
@@ -59,9 +59,10 @@ struct Arguments {
     long,
     value_enum,
     value_name = "TYPE",
-    help = "Use a specific IP address type (supported: 'public' or 'private')"
+    help = "Use a specific IP address type (supported: 'public' or 'private')",
+    default_value = "public"
   )]
-  ip_address_type: Option<types::IPAddressType>,
+  ip_address_type: types::IPAddressType,
 
   #[arg(
     long,
@@ -98,7 +99,9 @@ async fn main() -> Result<(), std::io::Error> {
 
   if args.value_from.is_some() {
     let source = args.value_from.unwrap();
-    if source == types::ValueFromSource::Auto {
+
+    // --value-from ecs-metadata
+    if source == types::ValueFromSource::EcsMetadata || source == types::ValueFromSource::Auto {
       if let Some(ecs_task_metadata) = utils::get_ecs_task_metadata().await {
         eprintln!("ecs_task_metadata: {:?}", ecs_task_metadata);
         // This naively grabs the IP for first container in the task, this should perhaps be configurable.
@@ -121,10 +124,30 @@ async fn main() -> Result<(), std::io::Error> {
         } else if args.record_type == Some(RrType::Aaaa) && network.ipv6_addresses.is_some() {
           args.value = network.ipv6_addresses.clone().unwrap();
         }
-      } else {
-        // TODO: Try the ec2 metadata endpoint
-        panic!("unable to detect environment (--value-from auto)")
       }
+    }
+
+    // --value-from ec2-metadata
+    if source == types::ValueFromSource::Ec2Metadata
+      || (source == types::ValueFromSource::Auto && args.value.is_empty())
+    {
+      let path = match (args.record_type.clone(), args.ip_address_type) {
+        (Some(RrType::A) | None, types::IPAddressType::Public) => "public-ipv4",
+        (Some(RrType::A) | None, types::IPAddressType::Private) => "local-ipv4",
+        (Some(RrType::Aaaa), _) => "ipv6",
+        _ => panic!("--value-from is only usable with --record-type A or AAAA"),
+      };
+      let imds_client = aws_config::imds::client::Client::builder().build();
+      if let Ok(value) = imds_client
+        .get(format!("/latest/meta-data/{}", path).as_str())
+        .await
+      {
+        args.value.push(value.as_ref().to_string());
+      }
+    }
+
+    if source == types::ValueFromSource::Auto && args.value.is_empty() {
+      panic!("unable to auto-detect an IP address to use (missing ECS environment variables and unable to connect to the EC2 instance metadata service)");
     }
   } else if args.value_from_url.is_some() {
     let url = args.value_from_url.unwrap();

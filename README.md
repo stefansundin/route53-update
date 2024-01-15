@@ -37,11 +37,11 @@ Options:
   -v, --value <VALUE>
           Record value (can be specified multiple times)
       --value-from <SOURCE>
-          Get the value from a specific source (supported: 'auto')
+          Get the value from a specific source (supported: 'auto', 'ec2-metadata', or 'ecs-metadata')
       --value-from-url <URL>
           Get the value from a URL (e.g. https://checkip.amazonaws.com/)
       --ip-address-type <TYPE>
-          Use a specific IP address type (supported: 'public' or 'private')
+          Use a specific IP address type (supported: 'public' or 'private') [default: public]
       --ttl <TTL>
           TTL for the DNS record (optional, if an existing record exists then its TTL will be copied, 300 is used as fallback)
       --wait
